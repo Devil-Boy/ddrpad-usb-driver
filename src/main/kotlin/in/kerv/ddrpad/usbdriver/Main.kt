@@ -47,8 +47,6 @@ private fun handleInputChange(
     previousControlBytes: DdrPadInputProcessor.ControlBytes,
     virtualDdrPad: InputDevice,
 ) {
-  println(currentControlBytes)
-
   val currentlyPressedButtons = currentControlBytes.getPressedButtons()
   val previouslyPressedButtons = previousControlBytes.getPressedButtons()
 
