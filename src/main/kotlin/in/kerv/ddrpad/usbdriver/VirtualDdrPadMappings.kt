@@ -4,7 +4,9 @@ import `in`.kerv.ddrpad.usbdriver.DdrPadInputProcessor.DdrPadButton
 import uk.co.bithatch.linuxio.EventCode
 
 object VirtualDdrPadMappings {
-
+  /**
+   * Maps physical DDR pad buttons to virtual gamepad button event codes.
+   */
   val realToVirtual =
       mapOf(
           DdrPadButton.UP to EventCode.BTN_NORTH,
@@ -27,5 +29,8 @@ object VirtualDdrPadMappings {
           DdrPadButton.DOWN_RIGHT to EventCode.BTN_TR2,
       )
 
+  /**
+   * Converts a [DdrPadButton] to its corresponding [EventCode].
+   */
   fun DdrPadButton.toEventCode() = realToVirtual[this]
 }

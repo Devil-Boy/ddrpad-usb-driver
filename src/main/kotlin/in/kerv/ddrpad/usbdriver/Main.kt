@@ -11,6 +11,7 @@ import net.codecrete.usb.UsbDirection
 import net.codecrete.usb.UsbEndpoint
 import uk.co.bithatch.linuxio.InputDevice
 
+/** Main entry point for the DDRPad USB driver. */
 @OptIn(ExperimentalUnsignedTypes::class)
 fun main() {
   val ddrPadHandle = Usb.findDevice(DdrPadUsbIds.vendorId, DdrPadUsbIds.productId).getOrNull()
@@ -42,6 +43,13 @@ fun main() {
   }
 }
 
+/**
+ * Handles changes in the DDRPad input, pressing or releasing virtual keys accordingly.
+ *
+ * @param currentControlBytes The current state of the DDRPad control bytes.
+ * @param previousControlBytes The previous state of the DDRPad control bytes.
+ * @param virtualDdrPad The virtual input device representing the DDRPad.
+ */
 private fun handleInputChange(
     currentControlBytes: DdrPadInputProcessor.ControlBytes,
     previousControlBytes: DdrPadInputProcessor.ControlBytes,
@@ -62,18 +70,39 @@ private fun handleInputChange(
   }
 }
 
+/**
+ * Blocks the current thread indefinitely.
+ *
+ * This is useful because the input processing loop is occurring in a separate thread and the main
+ * thread is the one holding the resources open
+ */
 private fun blockThreadIndefinitely() {
   while (true) {
     TimeUnit.HOURS.sleep(1)
   }
 }
 
+/**
+ * Extension function to find the single inbound endpoint from a list of USB endpoints.
+ *
+ * @return The single inbound [UsbEndpoint].
+ * @throws NoSuchElementException if no inbound endpoint is found.
+ * @throws IllegalArgumentException if more than one inbound endpoint is found.
+ */
 private fun List<UsbEndpoint>.getSingleInbound() = single { it.direction == UsbDirection.IN }
 
+/**
+ * Executes a block of code within the context of a virtual DDRPad controller.
+ *
+ * This is useful for manage the lifecycle of the virtual device. We don't want to leave a bunch of
+ * dangling virtual controllers on people's systems.
+ *
+ * @param block The code block to execute, receiving the [InputDevice] for the virtual DDRPad.
+ */
 private inline fun virtualControllerContext(
     block: (virtualDdrPad: InputDevice) -> Unit,
 ) {
-  InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad ->
+  InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad -> // NOPMD
     virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
 
     virtualDdrPad.open()
@@ -85,6 +114,16 @@ private inline fun virtualControllerContext(
   }
 }
 
+/**
+ * Executes a block of code within the context of a claimed USB interface.
+ *
+ * This is useful for manage the lifecycle of the USB interface. We don't want to hog the interface
+ * claim.
+ *
+ * @param usbDeviceHandle The [UsbDevice] handle.
+ * @param interfaceNumber The number of the interface to claim.
+ * @param block The code block to execute.
+ */
 private inline fun interfaceContext(
     usbDeviceHandle: UsbDevice,
     interfaceNumber: Int,
@@ -98,6 +137,15 @@ private inline fun interfaceContext(
   }
 }
 
+/**
+ * Executes a block of code within the context of an opened USB device.
+ *
+ * This is useful for manage the lifecycle of USB communication. We don't want to hold open the USB
+ * connection.
+ *
+ * @param usbDeviceHandle The [UsbDevice] handle.
+ * @param block The code block to execute.
+ */
 private inline fun deviceCommunicationContext(usbDeviceHandle: UsbDevice, block: () -> Unit) {
   usbDeviceHandle.open()
   try {
@@ -107,6 +155,16 @@ private inline fun deviceCommunicationContext(usbDeviceHandle: UsbDevice, block:
   }
 }
 
+/**
+ * Executes a block of code within a custom driver context, detaching and reattaching standard
+ * drivers.
+ *
+ * Our driver exists because the standard drive is unsufficient. However, out of respect, we should
+ * return things to how they were before we executed.
+ *
+ * @param usbDeviceHandle The [UsbDevice] handle.
+ * @param block The code block to execute.
+ */
 private inline fun customDriverContext(usbDeviceHandle: UsbDevice, block: () -> Unit) {
   usbDeviceHandle.detachStandardDrivers()
   try {
