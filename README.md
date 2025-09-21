@@ -1,16 +1,13 @@
-# DDR Dance Pad Linux Issue
+# DDRPad.com USB Linux Driver
 
-This document explains an issue with using the DDR Dance Pad from [ddrpad.com](https://ddrpad.com) on Linux.
+![ddrpad.com soft pad image](https://web.archive.org/web/20250921040257/https://ddrpad.com/cdn/shop/files/IMG_3266-Photoroom.png-Photoroom_941718f7-f967-47e8-9e4a-4b7160ac4cb0_480x.png?v=1746740255)
 
-## The Problem
+I was trying
+out [this DDR Pad](https://ddrpad.com/products/stepmania-soft-pad-1) ([cache](https://web.archive.org/web/20250921040257/https://ddrpad.com/products/stepmania-soft-pad-1))
+to use with Project Outfox on my SteamDeck. However, it turns out that even though its USB connector works fine with
+Windows' built-in driver, Linux's driver struggles due to some "quirk" in how it communicates during initialization.
 
-The DDR Dance Pad has a USB output that is compatible with Windows. However, when used with Linux, the device fails to initialize correctly. This appears to be caused by a quirk in the device's initialization communication that the standard Linux `sony` HID driver does not handle correctly.
-
-The dance pad identifies itself as a Sony PLAYSTATION(R)3 Controller, but it fails a subsequent step in the initialization process.
-
-## `dmesg` Output
-
-When the device is plugged into a Linux machine, the following output can be observed in the kernel log (`dmesg`):
+You end up seeing something like this when you use `sudo dmesg -w`:
 
 ```
 [  105.071305] usb 2-2: new full-speed USB device number 3 using ohci-pci
@@ -23,4 +20,16 @@ When the device is plugged into a Linux machine, the following output can be obs
 [  105.709950] sony 0003:054C:0268.0002: failed to claim input
 ```
 
-The key error message is `failed to retrieve feature report 0xf2 with the Sixaxis MAC address`, which indicates that the driver is expecting a feature that is specific to an official Sixaxis controller and is not present on the dance pad. This ultimately leads to `failed to claim input`, and the device is not usable.
+This is a user-space driver which:
+
+* uses libusb (via [JavaDoesUSB](https://github.com/manuelbl/JavaDoesUSB)) to:
+    * detect the DDR pad (which looks like a PlayStation 3 controller on the system)
+    * temporarily override the PlayStation 3 driver
+    * read physical inputs from the DDR pad
+* Linux's uinput (via [linuxio4j](https://github.com/bithatch/linuxio4j)) to:
+    * initialize a Virtual Gamepad on the system
+    * send button presses/releases through the virtual gamepad
+
+## Next steps
+
+* create a udev rules to automatically enable this driver when the DDR pad is plugged into the system
