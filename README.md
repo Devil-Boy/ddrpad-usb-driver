@@ -34,3 +34,4 @@ This is a user-space driver which:
 
 * create a udev rules to automatically enable this driver when the DDR pad is plugged into the system
 * properly support multiple DDR pads
+* use the polling interval from the usb interface descriptor
