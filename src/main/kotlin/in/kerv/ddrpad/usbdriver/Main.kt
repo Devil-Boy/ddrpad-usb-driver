@@ -102,7 +102,7 @@ private fun List<UsbEndpoint>.getSingleInbound() = single { it.direction == UsbD
 private inline fun virtualControllerContext(
     block: (virtualDdrPad: InputDevice) -> Unit,
 ) {
-  InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad -> // NOPMD
+  InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad ->
     virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
 
     virtualDdrPad.open()
@@ -159,7 +159,7 @@ private inline fun deviceCommunicationContext(usbDeviceHandle: UsbDevice, block:
  * Executes a block of code within a custom driver context, detaching and reattaching standard
  * drivers.
  *
- * Our driver exists because the standard drive is unsufficient. However, out of respect, we should
+ * Our driver exists because the standard drive is insufficient. However, out of respect, we should
  * return things to how they were before we executed.
  *
  * @param usbDeviceHandle The [UsbDevice] handle.
