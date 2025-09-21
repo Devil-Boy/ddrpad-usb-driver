@@ -6,6 +6,8 @@ import uk.co.bithatch.linuxio.EventCode
 object VirtualDdrPadMappings {
   /**
    * Maps physical DDR pad buttons to virtual gamepad button event codes.
+   *
+   * EventCode reference: https://web.archive.org/web/20250917115145/https://www.kernel.org/doc/html/v4.17/input/gamepad.html
    */
   val realToVirtual =
       mapOf(
