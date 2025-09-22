@@ -2,21 +2,49 @@ package `in`.kerv.ddrpad.usbdriver
 
 import `in`.kerv.ddrpad.usbdriver.DdrPadInputProcessor.toControlBytes
 import `in`.kerv.ddrpad.usbdriver.VirtualDdrPadMappings.toEventCode
+import kotlinx.coroutines.async
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.runBlocking
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.fixedRateTimer
-import kotlin.jvm.optionals.getOrNull
 import net.codecrete.usb.Usb
 import net.codecrete.usb.UsbDevice
 import net.codecrete.usb.UsbDirection
 import net.codecrete.usb.UsbEndpoint
 import uk.co.bithatch.linuxio.InputDevice
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+
+val unhandledDdrPads = Channel<UsbDevice>(Channel.UNLIMITED)
+val inputProcessingThread: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
 /** Main entry point for the DDRPad USB driver. */
 @OptIn(ExperimentalUnsignedTypes::class)
-fun main() {
-  val ddrPadHandle = Usb.findDevice(DdrPadUsbIds.vendorId, DdrPadUsbIds.productId).getOrNull()
-  checkNotNull(ddrPadHandle) { "DDRPad device not found." }
+suspend fun main() {
+  collectAnyAlreadyConnectedDdrPads()
+  listenForAndCollectNewlyConnectedDdrPads()
 
+  // Using a Kotlin Channel, we can block/suspend the main thread on waiting for new DdrPad devices
+  for (unhandledDdrPad in unhandledDdrPads) {
+    handleDdrPad(unhandledDdrPad)
+  }
+}
+
+private fun collectAnyAlreadyConnectedDdrPads() {
+  for (ddrPad in Usb.findDevices(DdrPadUsbIds::matches)) {
+    unhandledDdrPads.trySend(ddrPad)
+  }
+}
+
+private fun listenForAndCollectNewlyConnectedDdrPads() {
+  Usb.setOnDeviceConnected {
+    if (DdrPadUsbIds.matches(it)) {
+      unhandledDdrPads.trySend(it)
+    }
+  }
+}
+
+private fun handleDdrPad(ddrPadHandle: UsbDevice) {
   customDriverContext(ddrPadHandle) {
     deviceCommunicationContext(ddrPadHandle) {
       val iface = ddrPadHandle.interfaces[0]
@@ -26,17 +54,15 @@ fun main() {
         virtualControllerContext { virtualDdrPad ->
           var previousControlBytes = ddrPadHandle.transferIn(inboundEndpointNumber).toControlBytes()
 
-          fixedRateTimer(name = "Input processing loop", period = 10 /* milliseconds */) {
+          inputProcessingThread.scheduleAtFixedRate({
             val currentControlBytes =
-                ddrPadHandle.transferIn(inboundEndpointNumber).toControlBytes()
+              ddrPadHandle.transferIn(inboundEndpointNumber).toControlBytes()
 
             if (currentControlBytes.changedFrom(previousControlBytes)) {
               handleInputChange(currentControlBytes, previousControlBytes, virtualDdrPad)
               previousControlBytes = currentControlBytes
             }
-          }
-
-          blockThreadIndefinitely()
+          }, /* initialDelay = */ 0, /* period = */ 10, TimeUnit.MILLISECONDS).get()
         }
       }
     }
@@ -51,9 +77,9 @@ fun main() {
  * @param virtualDdrPad The virtual input device representing the DDRPad.
  */
 private fun handleInputChange(
-    currentControlBytes: DdrPadInputProcessor.ControlBytes,
-    previousControlBytes: DdrPadInputProcessor.ControlBytes,
-    virtualDdrPad: InputDevice,
+  currentControlBytes: DdrPadInputProcessor.ControlBytes,
+  previousControlBytes: DdrPadInputProcessor.ControlBytes,
+  virtualDdrPad: InputDevice,
 ) {
   val currentlyPressedButtons = currentControlBytes.getPressedButtons()
   val previouslyPressedButtons = previousControlBytes.getPressedButtons()
@@ -67,18 +93,6 @@ private fun handleInputChange(
 
   for (newlyReleasedButtons in newlyReleasedButtons) {
     virtualDdrPad.releaseKey(newlyReleasedButtons.toEventCode())
-  }
-}
-
-/**
- * Blocks the current thread indefinitely.
- *
- * This is useful because the input processing loop is occurring in a separate thread and the main
- * thread is the one holding the resources open
- */
-private fun blockThreadIndefinitely() {
-  while (true) {
-    TimeUnit.HOURS.sleep(1)
   }
 }
 
@@ -100,7 +114,7 @@ private fun List<UsbEndpoint>.getSingleInbound() = single { it.direction == UsbD
  * @param block The code block to execute, receiving the [InputDevice] for the virtual DDRPad.
  */
 private inline fun virtualControllerContext(
-    block: (virtualDdrPad: InputDevice) -> Unit,
+  block: (virtualDdrPad: InputDevice) -> Unit,
 ) {
   InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad ->
     virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
@@ -125,9 +139,9 @@ private inline fun virtualControllerContext(
  * @param block The code block to execute.
  */
 private inline fun interfaceContext(
-    usbDeviceHandle: UsbDevice,
-    interfaceNumber: Int,
-    block: () -> Unit,
+  usbDeviceHandle: UsbDevice,
+  interfaceNumber: Int,
+  block: () -> Unit,
 ) {
   usbDeviceHandle.claimInterface(interfaceNumber)
   try {
