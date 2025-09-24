@@ -135,8 +135,8 @@ private fun handleInputChange(
     virtualDdrPad.pressKey(newlyPressedButton.toEventCode())
   }
 
-  for (newlyReleasedButtons in newlyReleasedButtons) {
-    virtualDdrPad.releaseKey(newlyReleasedButtons.toEventCode())
+  for (newlyReleasedButton in newlyReleasedButtons) {
+    virtualDdrPad.releaseKey(newlyReleasedButton.toEventCode())
   }
 }
 
