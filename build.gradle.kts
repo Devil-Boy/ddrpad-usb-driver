@@ -16,6 +16,7 @@ dependencies {
   implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
   implementation("net.codecrete.usb:java-does-usb:1.2.1")
   implementation("uk.co.bithatch:linuxio4j:2.1")
+  implementation("io.github.oshai:kotlin-logging-jvm:7.0.3")
 }
 
 tasks.test {
