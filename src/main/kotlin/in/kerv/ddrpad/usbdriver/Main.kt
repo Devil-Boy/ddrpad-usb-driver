@@ -2,41 +2,116 @@ package `in`.kerv.ddrpad.usbdriver
 
 import `in`.kerv.ddrpad.usbdriver.DdrPadInputProcessor.toControlBytes
 import `in`.kerv.ddrpad.usbdriver.VirtualDdrPadMappings.toEventCode
-import java.util.concurrent.TimeUnit
-import kotlin.concurrent.fixedRateTimer
-import kotlin.jvm.optionals.getOrNull
+import io.github.oshai.kotlinlogging.KotlinLogging
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import net.codecrete.usb.Usb
 import net.codecrete.usb.UsbDevice
 import net.codecrete.usb.UsbDirection
-import net.codecrete.usb.UsbEndpoint
+import net.codecrete.usb.UsbException
+import net.codecrete.usb.linux.LinuxUsbException
 import uk.co.bithatch.linuxio.InputDevice
+import java.io.IOException
+import kotlin.time.Duration.Companion.milliseconds
+
+private val unhandledDdrPads = Channel<UsbDevice>(Channel.UNLIMITED)
+
+private val logger = KotlinLogging.logger { }
 
 /** Main entry point for the DDRPad USB driver. */
 @OptIn(ExperimentalUnsignedTypes::class)
-fun main() {
-  val ddrPadHandle = Usb.findDevice(DdrPadUsbIds.vendorId, DdrPadUsbIds.productId).getOrNull()
-  checkNotNull(ddrPadHandle) { "DDRPad device not found." }
+fun main() = runBlocking {
+  collectAnyAlreadyConnectedDdrPads()
+  listenForAndCollectNewlyConnectedDdrPads()
 
+  // Using a Kotlin Channel, we can block/suspend the main thread on waiting for new DdrPad devices
+  logger.debug { "Waiting on unhandled DDRPads..." }
+  for (unhandledDdrPad in unhandledDdrPads) {
+    logger.debug { "Received USB device: ${unhandledDdrPad.debugIdentifierString()}" }
+    launch(Dispatchers.IO) {
+      logger.debug { "Dispatched coroutine for: ${unhandledDdrPad.debugIdentifierString()}" }
+      continuouslyMapDdrPadInputsToVirtualGamepad(unhandledDdrPad)
+    }
+  }
+}
+
+private fun collectAnyAlreadyConnectedDdrPads() {
+  for (ddrPad in Usb.findDevices(DdrPadUsbIds::matches)) {
+    unhandledDdrPads.trySend(ddrPad)
+  }
+}
+
+/**
+ * Sets up a listener to collect newly connected DDRPads.
+ */
+private fun listenForAndCollectNewlyConnectedDdrPads() {
+  Usb.setOnDeviceConnected {
+    if (DdrPadUsbIds.matches(it)) {
+      unhandledDdrPads.trySend(it)
+    }
+  }
+}
+
+/**
+ * Continuously maps inputs from a physical DDRPad to a virtual gamepad.
+ *
+ * This function handles the entire lifecycle of a single DDRPad device, from claiming its interface
+ * to continuously reading its input and translating it into virtual gamepad events. It also manages
+ * error handling and resource cleanup for the device.
+ *
+ * @param ddrPadHandle The [UsbDevice] representing the physical DDRPad.
+ */
+private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: UsbDevice) {
   customDriverContext(ddrPadHandle) {
     deviceCommunicationContext(ddrPadHandle) {
-      val iface = ddrPadHandle.interfaces[0]
-      val inboundEndpointNumber = iface.currentAlternate.endpoints.getSingleInbound().number
+      val usbInterface = try {
+        ddrPadHandle.interfaces[0]
+      } catch (exception: UsbException) {
+        logger.debug(exception) { "Failed to grab interface 0! Maybe this isn't a DDRPad?" }
+        return@deviceCommunicationContext
+      }
 
-      interfaceContext(ddrPadHandle, iface.number) {
+      // We only expect there to be 1 "alternate interface" on the DDRPad. If this isn't a DDRPad, we'll find out later in the code.
+      val usbInterfaceAlternate = usbInterface.currentAlternate
+
+      val usbInboundEndpoints = usbInterfaceAlternate.endpoints.filter { it.direction == UsbDirection.IN }
+      if (usbInboundEndpoints.size != 1) {
+        logger.debug { "${ddrPadHandle.debugIdentifierString()} has the wrong number of inbound endpoints: ${usbInboundEndpoints.size}. Maybe this isn't a DDRPad?" }
+        return@deviceCommunicationContext
+      }
+      val usbInboundEndpointNumber = usbInboundEndpoints.single().number
+
+      interfaceContext(ddrPadHandle, usbInterface.number) {
         virtualControllerContext { virtualDdrPad ->
-          var previousControlBytes = ddrPadHandle.transferIn(inboundEndpointNumber).toControlBytes()
+          var previousControlBytes = try {
+            ddrPadHandle.transferIn(usbInboundEndpointNumber).toControlBytes()
+          } catch (exception: UsbException) {
+            logger.error(exception) { "Failed first attempt to read the control bytes! Maybe this isn't a DDRPad?" }
+            return@virtualControllerContext
+          }
 
-          fixedRateTimer(name = "Input processing loop", period = 10 /* milliseconds */) {
-            val currentControlBytes =
-                ddrPadHandle.transferIn(inboundEndpointNumber).toControlBytes()
+          while (true) {
+            val currentControlBytes = try {
+              ddrPadHandle.transferIn(usbInboundEndpointNumber).toControlBytes()
+            } catch (exception: UsbException) {
+              logger.debug(exception) { "If the DDRPad was unplugged, this is intended. Otherwise, something went wrong." }
+              break
+            }
+
+            // Used to discover the dance pad raw input values
+            //logger.debug { currentControlBytes }
 
             if (currentControlBytes.changedFrom(previousControlBytes)) {
               handleInputChange(currentControlBytes, previousControlBytes, virtualDdrPad)
               previousControlBytes = currentControlBytes
             }
-          }
 
-          blockThreadIndefinitely()
+            // This is just an arbitrarily low value right now. We can probably go lower before failing reads, but this works fine based on my limited testing. (A better DDR player can correct me.)
+            delay(2.milliseconds)
+          }
         }
       }
     }
@@ -51,9 +126,9 @@ fun main() {
  * @param virtualDdrPad The virtual input device representing the DDRPad.
  */
 private fun handleInputChange(
-    currentControlBytes: DdrPadInputProcessor.ControlBytes,
-    previousControlBytes: DdrPadInputProcessor.ControlBytes,
-    virtualDdrPad: InputDevice,
+  currentControlBytes: DdrPadInputProcessor.ControlBytes,
+  previousControlBytes: DdrPadInputProcessor.ControlBytes,
+  virtualDdrPad: InputDevice,
 ) {
   val currentlyPressedButtons = currentControlBytes.getPressedButtons()
   val previouslyPressedButtons = previousControlBytes.getPressedButtons()
@@ -61,35 +136,17 @@ private fun handleInputChange(
   val newlyPressedButtons = currentlyPressedButtons subtract previouslyPressedButtons
   val newlyReleasedButtons = previouslyPressedButtons subtract currentlyPressedButtons
 
+  // The JIT should be able to compile this out at runtime and make it no-cost
+  logger.debug { "Newly pressed: $newlyPressedButtons, Newly released: $newlyReleasedButtons" }
+
   for (newlyPressedButton in newlyPressedButtons) {
     virtualDdrPad.pressKey(newlyPressedButton.toEventCode())
   }
 
-  for (newlyReleasedButtons in newlyReleasedButtons) {
-    virtualDdrPad.releaseKey(newlyReleasedButtons.toEventCode())
+  for (newlyReleasedButton in newlyReleasedButtons) {
+    virtualDdrPad.releaseKey(newlyReleasedButton.toEventCode())
   }
 }
-
-/**
- * Blocks the current thread indefinitely.
- *
- * This is useful because the input processing loop is occurring in a separate thread and the main
- * thread is the one holding the resources open
- */
-private fun blockThreadIndefinitely() {
-  while (true) {
-    TimeUnit.HOURS.sleep(1)
-  }
-}
-
-/**
- * Extension function to find the single inbound endpoint from a list of USB endpoints.
- *
- * @return The single inbound [UsbEndpoint].
- * @throws NoSuchElementException if no inbound endpoint is found.
- * @throws IllegalArgumentException if more than one inbound endpoint is found.
- */
-private fun List<UsbEndpoint>.getSingleInbound() = single { it.direction == UsbDirection.IN }
 
 /**
  * Executes a block of code within the context of a virtual DDRPad controller.
@@ -100,18 +157,28 @@ private fun List<UsbEndpoint>.getSingleInbound() = single { it.direction == UsbD
  * @param block The code block to execute, receiving the [InputDevice] for the virtual DDRPad.
  */
 private inline fun virtualControllerContext(
-    block: (virtualDdrPad: InputDevice) -> Unit,
+  block: (virtualDdrPad: InputDevice) -> Unit,
 ) {
-  InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad ->
-    virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
+  val virtualDdrPad = InputDevice("Virtual DDRPad", 0xdead, 0xbeef)
+  virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
 
+  try {
     virtualDdrPad.open()
+  } catch (exception: IOException) {
+    logger.error(exception) { "Failed to open virtual gamepad!" }
+    return
+  }
+
+  try {
+    block(virtualDdrPad)
+  } finally {
     try {
-      block(virtualDdrPad)
-    } finally {
       virtualDdrPad.close()
+    } catch (exception: IOException) {
+      logger.error(exception) { "Failed to close virtual gamepad. The virtual device is probably just going to dangle there, but there's nothing we can do about it." }
     }
   }
+
 }
 
 /**
@@ -125,15 +192,22 @@ private inline fun virtualControllerContext(
  * @param block The code block to execute.
  */
 private inline fun interfaceContext(
-    usbDeviceHandle: UsbDevice,
-    interfaceNumber: Int,
-    block: () -> Unit,
+  usbDeviceHandle: UsbDevice,
+  interfaceNumber: Int,
+  block: () -> Unit,
 ) {
   usbDeviceHandle.claimInterface(interfaceNumber)
   try {
     block()
   } finally {
-    usbDeviceHandle.releaseInterface(interfaceNumber)
+    try {
+      usbDeviceHandle.releaseInterface(interfaceNumber)
+    } catch (exception: LinuxUsbException) {
+      // 19 means "No such device" which simply happens when devices are rapidly unplugged.
+      if (exception.errorCode != 19) {
+        throw exception
+      }
+    }
   }
 }
 
@@ -173,3 +247,10 @@ private inline fun customDriverContext(usbDeviceHandle: UsbDevice, block: () -> 
     usbDeviceHandle.attachStandardDrivers()
   }
 }
+
+/**
+ * Returns a distinct identifier for the UsbDevice.
+ *
+ * Serial number should be distinct, but this can be improved in the future if needed.
+ */
+private fun UsbDevice.debugIdentifierString() = "<serialNumber:$serialNumber>"
