@@ -12,6 +12,7 @@ import net.codecrete.usb.Usb
 import net.codecrete.usb.UsbDevice
 import net.codecrete.usb.UsbDirection
 import net.codecrete.usb.UsbException
+import net.codecrete.usb.linux.LinuxUsbException
 import uk.co.bithatch.linuxio.InputDevice
 import java.io.IOException
 import kotlin.time.Duration.Companion.milliseconds
@@ -27,6 +28,7 @@ fun main() = runBlocking {
   listenForAndCollectNewlyConnectedDdrPads()
 
   // Using a Kotlin Channel, we can block/suspend the main thread on waiting for new DdrPad devices
+  logger.debug { "Waiting on unhandled DDRPads..." }
   for (unhandledDdrPad in unhandledDdrPads) {
     logger.debug { "Received USB device: ${unhandledDdrPad.debugIdentifierString()}" }
     launch(Dispatchers.IO) {
@@ -99,13 +101,16 @@ private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: Us
               break
             }
 
+            // Used to discover the dance pad raw input values
+            //logger.debug { currentControlBytes }
+
             if (currentControlBytes.changedFrom(previousControlBytes)) {
               handleInputChange(currentControlBytes, previousControlBytes, virtualDdrPad)
               previousControlBytes = currentControlBytes
             }
 
-            // This is just an arbitrarily low value right now. We can probably go lower before failing reads, but 10ms works fine based on my limited testing. (A better DDR player can correct me.)
-            delay(10.milliseconds)
+            // This is just an arbitrarily low value right now. We can probably go lower before failing reads, but this works fine based on my limited testing. (A better DDR player can correct me.)
+            delay(2.milliseconds)
           }
         }
       }
@@ -131,6 +136,9 @@ private fun handleInputChange(
   val newlyPressedButtons = currentlyPressedButtons subtract previouslyPressedButtons
   val newlyReleasedButtons = previouslyPressedButtons subtract currentlyPressedButtons
 
+  // The JIT should be able to compile this out at runtime and make it no-cost
+  logger.debug { "Newly pressed: $newlyPressedButtons, Newly released: $newlyReleasedButtons" }
+
   for (newlyPressedButton in newlyPressedButtons) {
     virtualDdrPad.pressKey(newlyPressedButton.toEventCode())
   }
@@ -151,26 +159,26 @@ private fun handleInputChange(
 private inline fun virtualControllerContext(
   block: (virtualDdrPad: InputDevice) -> Unit,
 ) {
-  InputDevice("Virtual DDRPad", 0xdead, 0xbeef).use { virtualDdrPad ->
-    virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
+  val virtualDdrPad = InputDevice("Virtual DDRPad", 0xdead, 0xbeef)
+  virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
 
+  try {
+    virtualDdrPad.open()
+  } catch (exception: IOException) {
+    logger.error(exception) { "Failed to open virtual gamepad!" }
+    return
+  }
+
+  try {
+    block(virtualDdrPad)
+  } finally {
     try {
-      virtualDdrPad.open()
+      virtualDdrPad.close()
     } catch (exception: IOException) {
-      logger.error(exception) { "Failed to open virtual gamepad!" }
-      return@use
-    }
-
-    try {
-      block(virtualDdrPad)
-    } finally {
-      try {
-        virtualDdrPad.close()
-      } catch (exception: IOException) {
-        logger.error(exception) { "Failed to close virtual gamepad. The virtual device is probably just going to dangle there, but there's nothing we can do about it." }
-      }
+      logger.error(exception) { "Failed to close virtual gamepad. The virtual device is probably just going to dangle there, but there's nothing we can do about it." }
     }
   }
+
 }
 
 /**
@@ -192,7 +200,14 @@ private inline fun interfaceContext(
   try {
     block()
   } finally {
-    usbDeviceHandle.releaseInterface(interfaceNumber)
+    try {
+      usbDeviceHandle.releaseInterface(interfaceNumber)
+    } catch (exception: LinuxUsbException) {
+      // 19 means "No such device" which simply happens when devices are rapidly unplugged.
+      if (exception.errorCode != 19) {
+        throw exception
+      }
+    }
   }
 }
 

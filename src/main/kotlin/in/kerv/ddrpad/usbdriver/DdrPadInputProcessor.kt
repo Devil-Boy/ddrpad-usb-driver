@@ -5,9 +5,8 @@ object DdrPadInputProcessor {
 
   /**
    * Converts a raw byte array received from the DDRPad USB device into a [ControlBytes] object.
-   * Based on testing, DDRPad's control bytes are always at indices 2 and 3 of the raw input report.
    */
-  fun ByteArray.toControlBytes() = ControlBytes(ubyteArrayOf(this[2].toUByte(), this[3].toUByte()))
+  fun ByteArray.toControlBytes() = ControlBytes(this.toUByteArray())
 
   /**
    * A value class representing the two control bytes received from the DDRPad.
@@ -18,8 +17,7 @@ object DdrPadInputProcessor {
   @JvmInline
   value class ControlBytes(val bytes: UByteArray) {
     init {
-      // Ensure that exactly two bytes are provided, as per DDRPad specification.
-      require(bytes.size == 2) { "The DDRPad always has 2 control bytes!" }
+      require(bytes.size == 8) { "The DDRPad always has 8 control bytes!" }
     }
 
     /**
@@ -45,23 +43,25 @@ object DdrPadInputProcessor {
     /**
      * Returns a string representation of the currently pressed buttons for debugging/development purposes.
      */
-    override fun toString() = "Pressed buttons: ${getPressedButtons()}"
+    override fun toString() = "Raw: [${bytes.toBinaryStrings()}], Parsed: ${getPressedButtons()}"
+
+    private fun UByteArray.toBinaryStrings() = this.joinToString { it.toString(2).padStart(8, '0')  }
   }
 
   /** Represents the individual buttons on a DDRPad, along with their control byte index and bitmask. */
   enum class DdrPadButton(val controlByteIndex: Int, val bitMask: UByte) {
-    UP(0, 0b00010000.toUByte()),
-    DOWN(0, 0b01000000.toUByte()),
-    LEFT(0, 0b10000000.toUByte()),
-    RIGHT(0, 0b00100000.toUByte()),
+    UP(2, 0b00000001.toUByte()),
+    DOWN(2, 0b00000010.toUByte()),
+    LEFT(2, 0b00000100.toUByte()),
+    RIGHT(2, 0b00001000.toUByte()),
 
-    UP_LEFT(1, 0b00100000.toUByte()),
-    UP_RIGHT(1, 0b01000000.toUByte()),
-    DOWN_LEFT(1, 0b10000000.toUByte()),
-    DOWN_RIGHT(1, 0b00010000.toUByte()),
+    UP_LEFT(4, 0b11111111.toUByte()),
+    UP_RIGHT(5, 0b11111111.toUByte()),
+    DOWN_LEFT(7, 0b11111111.toUByte()),
+    DOWN_RIGHT(6, 0b11111111.toUByte()),
 
-    START(0, 0b00001000.toUByte()),
-    SELECT(0, 0b00000001.toUByte()),
+    START(2, 0b00010000.toUByte()),
+    SELECT(2, 0b00100000.toUByte()),
   }
 
 }
