@@ -35,3 +35,7 @@ This is a user-space driver which:
 * create a udev rules to automatically enable this driver when the DDR pad is plugged into the system
 * properly support multiple DDR pads
 * set the polling interval based on the speed of the connection (bInterval in the endpoint descriptor is 1, but I'm not sure if that's milliseconds)
+
+## Alternative
+
+Instead of using this driver, you can use a Gamecube adapter ([like this one](https://www.amazon.com/gp/aw/d/B00RSXRLUE?psc=1&ref=ppx_pop_mob_b_asin_title)) and map the arrows to the a, b, x, and y buttons to avoid the "axis issue".
