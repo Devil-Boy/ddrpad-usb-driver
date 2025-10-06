@@ -17,7 +17,7 @@ object DdrPadInputProcessor {
   @JvmInline
   value class ControlBytes(val bytes: UByteArray) {
     init {
-      require(bytes.size == 8) { "The DDRPad always has 8 control bytes!" }
+      //require(bytes.size == 8) { "The DDRPad always has 8 control bytes!" }
     }
 
     /**
@@ -50,18 +50,18 @@ object DdrPadInputProcessor {
 
   /** Represents the individual buttons on a DDRPad, along with their control byte index and bitmask. */
   enum class DdrPadButton(val controlByteIndex: Int, val bitMask: UByte) {
-    UP(2, 0b00000001.toUByte()),
-    DOWN(2, 0b00000010.toUByte()),
-    LEFT(2, 0b00000100.toUByte()),
-    RIGHT(2, 0b00001000.toUByte()),
+    UP(2, 0b0010000.toUByte()),
+    DOWN(2, 0b01000000.toUByte()),
+    LEFT(2, 0b10000000.toUByte()),
+    RIGHT(2, 0b00100000.toUByte()),
 
-    UP_LEFT(4, 0b11111111.toUByte()),
-    UP_RIGHT(5, 0b11111111.toUByte()),
-    DOWN_LEFT(7, 0b11111111.toUByte()),
-    DOWN_RIGHT(6, 0b11111111.toUByte()),
+    UP_LEFT(3, 0b00100000.toUByte()),
+    UP_RIGHT(3, 0b01000000.toUByte()),
+    DOWN_LEFT(3, 0b10000000.toUByte()),
+    DOWN_RIGHT(3, 0b00010000.toUByte()),
 
-    START(2, 0b00010000.toUByte()),
-    SELECT(2, 0b00100000.toUByte()),
+    START(2, 0b00001000.toUByte()),
+    SELECT(2, 0b00000001.toUByte()),
   }
 
 }
