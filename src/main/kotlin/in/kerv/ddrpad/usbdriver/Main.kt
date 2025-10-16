@@ -67,21 +67,37 @@ private fun listenForAndCollectNewlyConnectedDdrPads() {
 private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: UsbDevice) {
   customDriverContext(ddrPadHandle) {
     deviceCommunicationContext(ddrPadHandle) {
-      val usbInterface = try {
-        ddrPadHandle.interfaces[0]
-      } catch (exception: UsbException) {
-        logger.debug(exception) { "Failed to grab interface 0! Maybe this isn't a DDRPad?" }
+      logger.debug { "Interfaces: ${ddrPadHandle.interfaces}" }
+
+      if (ddrPadHandle.interfaces.size != 1) {
+        // As far as we know, the DDRPad only has a single interface on it
         return@deviceCommunicationContext
       }
 
-      // We only expect there to be 1 "alternate interface" on the DDRPad. If this isn't a DDRPad, we'll find out later in the code.
-      val usbInterfaceAlternate = usbInterface.currentAlternate
+      val usbInterface = try {
+        ddrPadHandle.interfaces.single()
+      } catch (exception: UsbException) {
+        logger.debug(exception) { "Failed to grab interface!" }
+        return@deviceCommunicationContext
+      }
+
+      logger.debug { "Alternates: ${usbInterface.alternates}" }
+
+      if (usbInterface.alternates.size != 1) {
+        // As far as we know, the DDRPad only has a single alternate interface on it
+        return@deviceCommunicationContext
+      }
+
+      val usbInterfaceAlternate = usbInterface.alternates.single()
+
+      logger.debug { "Endpoints: ${usbInterfaceAlternate.endpoints.joinToString { "${it.direction}@${it.number}" }}" }
 
       val usbInboundEndpoints = usbInterfaceAlternate.endpoints.filter { it.direction == UsbDirection.IN }
       if (usbInboundEndpoints.size != 1) {
-        logger.debug { "${ddrPadHandle.debugIdentifierString()} has the wrong number of inbound endpoints: ${usbInboundEndpoints.size}. Maybe this isn't a DDRPad?" }
+        // As far as we know, the DDRPad only has a single input endpoint on it
         return@deviceCommunicationContext
       }
+
       val usbInboundEndpointNumber = usbInboundEndpoints.single().number
 
       interfaceContext(ddrPadHandle, usbInterface.number) {
