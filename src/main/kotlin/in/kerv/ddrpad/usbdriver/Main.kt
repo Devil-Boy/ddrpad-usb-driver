@@ -3,6 +3,8 @@ package `in`.kerv.ddrpad.usbdriver
 import `in`.kerv.ddrpad.usbdriver.DdrPadInputProcessor.toControlBytes
 import `in`.kerv.ddrpad.usbdriver.VirtualDdrPadMappings.toEventCode
 import io.github.oshai.kotlinlogging.KotlinLogging
+import java.io.IOException
+import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
@@ -14,12 +16,10 @@ import net.codecrete.usb.UsbDirection
 import net.codecrete.usb.UsbException
 import net.codecrete.usb.linux.LinuxUsbException
 import uk.co.bithatch.linuxio.InputDevice
-import java.io.IOException
-import kotlin.time.Duration.Companion.milliseconds
 
 private val unhandledDdrPads = Channel<UsbDevice>(Channel.UNLIMITED)
 
-private val logger = KotlinLogging.logger { }
+private val logger = KotlinLogging.logger {}
 
 /** Main entry point for the DDRPad USB driver. */
 @OptIn(ExperimentalUnsignedTypes::class)
@@ -44,9 +44,7 @@ private fun collectAnyAlreadyConnectedDdrPads() {
   }
 }
 
-/**
- * Sets up a listener to collect newly connected DDRPads.
- */
+/** Sets up a listener to collect newly connected DDRPads. */
 private fun listenForAndCollectNewlyConnectedDdrPads() {
   Usb.setOnDeviceConnected {
     if (DdrPadUsbIds.matches(it)) {
@@ -74,12 +72,13 @@ private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: Us
         return@deviceCommunicationContext
       }
 
-      val usbInterface = try {
-        ddrPadHandle.interfaces.single()
-      } catch (exception: UsbException) {
-        logger.debug(exception) { "Failed to grab interface!" }
-        return@deviceCommunicationContext
-      }
+      val usbInterface =
+          try {
+            ddrPadHandle.interfaces.single()
+          } catch (exception: UsbException) {
+            logger.debug(exception) { "Failed to grab interface!" }
+            return@deviceCommunicationContext
+          }
 
       logger.debug { "Alternates: ${usbInterface.alternates}" }
 
@@ -90,9 +89,12 @@ private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: Us
 
       val usbInterfaceAlternate = usbInterface.alternates.single()
 
-      logger.debug { "Endpoints: ${usbInterfaceAlternate.endpoints.joinToString { "${it.direction}@${it.number}" }}" }
+      logger.debug {
+        "Endpoints: ${usbInterfaceAlternate.endpoints.joinToString { "${it.direction}@${it.number}" }}"
+      }
 
-      val usbInboundEndpoints = usbInterfaceAlternate.endpoints.filter { it.direction == UsbDirection.IN }
+      val usbInboundEndpoints =
+          usbInterfaceAlternate.endpoints.filter { it.direction == UsbDirection.IN }
       if (usbInboundEndpoints.size != 1) {
         // As far as we know, the DDRPad only has a single input endpoint on it
         return@deviceCommunicationContext
@@ -102,20 +104,35 @@ private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: Us
 
       interfaceContext(ddrPadHandle, usbInterface.number) {
         virtualControllerContext { virtualDdrPad ->
-          var previousControlBytes = try {
-            ddrPadHandle.transferIn(usbInboundEndpointNumber).toControlBytes()
-          } catch (exception: UsbException) {
-            logger.error(exception) { "Failed first attempt to read the control bytes! Maybe this isn't a DDRPad?" }
-            return@virtualControllerContext
-          }
+          var previousControlBytes =
+              try {
+                val rawBytes = ddrPadHandle.transferIn(usbInboundEndpointNumber)
+
+                // We check the expected amount of bytes here, once. We assume it won't change while
+                // the device is connected.
+                if (!DdrPadInputProcessor.isRecognizedNumberOfControlBytes(rawBytes.size)) {
+                  logger.error { "We don't know how to handle ${rawBytes.size} control bytes!" }
+                  return@virtualControllerContext
+                }
+
+                rawBytes.toControlBytes()
+              } catch (exception: UsbException) {
+                logger.error(exception) {
+                  "Failed first attempt to read the control bytes! Maybe this isn't a DDRPad?"
+                }
+                return@virtualControllerContext
+              }
 
           while (true) {
-            val currentControlBytes = try {
-              ddrPadHandle.transferIn(usbInboundEndpointNumber).toControlBytes()
-            } catch (exception: UsbException) {
-              logger.debug(exception) { "If the DDRPad was unplugged, this is intended. Otherwise, something went wrong." }
-              break
-            }
+            val currentControlBytes =
+                try {
+                  ddrPadHandle.transferIn(usbInboundEndpointNumber).toControlBytes()
+                } catch (exception: UsbException) {
+                  logger.debug(exception) {
+                    "If the DDRPad was unplugged, this is intended. Otherwise, something went wrong."
+                  }
+                  break
+                }
 
             // Used to discover the dance pad raw input values
             //logger.debug { currentControlBytes }
@@ -125,7 +142,9 @@ private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: Us
               previousControlBytes = currentControlBytes
             }
 
-            // This is just an arbitrarily low value right now. We can probably go lower before failing reads, but this works fine based on my limited testing. (A better DDR player can correct me.)
+            // This is just an arbitrarily low value right now. We can probably go lower before
+            // failing reads, but this works fine based on my limited testing. (A better DDR player
+            // can correct me.)
             delay(2.milliseconds)
           }
         }
@@ -142,9 +161,9 @@ private suspend fun continuouslyMapDdrPadInputsToVirtualGamepad(ddrPadHandle: Us
  * @param virtualDdrPad The virtual input device representing the DDRPad.
  */
 private fun handleInputChange(
-  currentControlBytes: DdrPadInputProcessor.ControlBytes,
-  previousControlBytes: DdrPadInputProcessor.ControlBytes,
-  virtualDdrPad: InputDevice,
+    currentControlBytes: DdrPadInputProcessor.ControlBytes,
+    previousControlBytes: DdrPadInputProcessor.ControlBytes,
+    virtualDdrPad: InputDevice,
 ) {
   val currentlyPressedButtons = currentControlBytes.getPressedButtons()
   val previouslyPressedButtons = previousControlBytes.getPressedButtons()
@@ -173,7 +192,7 @@ private fun handleInputChange(
  * @param block The code block to execute, receiving the [InputDevice] for the virtual DDRPad.
  */
 private inline fun virtualControllerContext(
-  block: (virtualDdrPad: InputDevice) -> Unit,
+    block: (virtualDdrPad: InputDevice) -> Unit,
 ) {
   val virtualDdrPad = InputDevice("Virtual DDRPad", 0xdead, 0xbeef)
   virtualDdrPad.capabilities += VirtualDdrPadMappings.realToVirtual.values
@@ -191,10 +210,11 @@ private inline fun virtualControllerContext(
     try {
       virtualDdrPad.close()
     } catch (exception: IOException) {
-      logger.error(exception) { "Failed to close virtual gamepad. The virtual device is probably just going to dangle there, but there's nothing we can do about it." }
+      logger.error(exception) {
+        "Failed to close virtual gamepad. The virtual device is probably just going to dangle there, but there's nothing we can do about it."
+      }
     }
   }
-
 }
 
 /**
@@ -208,9 +228,9 @@ private inline fun virtualControllerContext(
  * @param block The code block to execute.
  */
 private inline fun interfaceContext(
-  usbDeviceHandle: UsbDevice,
-  interfaceNumber: Int,
-  block: () -> Unit,
+    usbDeviceHandle: UsbDevice,
+    interfaceNumber: Int,
+    block: () -> Unit,
 ) {
   usbDeviceHandle.claimInterface(interfaceNumber)
   try {
